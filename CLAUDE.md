@@ -17,7 +17,7 @@ Twitchチャットをリアルタイムで監視し、非日本語コメント�
 ```
 server.js          # メインサーバー (Express + Socket.IO + TMI + SQLite + Gemini)
 public/index.html  # Web UI (HTML/CSS/JS一体型)
-.env               # 環境変数 (TWITCH_TOKEN, BOT_NAME, GEMINI_API_KEY)
+.env               # 環境変数 (TWITCH_TOKEN, BOT_NAME, GEMINI_API_KEY, OPENAI_API_KEY)
 data.db            # SQLiteデータベース (自動生成)
 ```
 
@@ -44,7 +44,10 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - チャットメッセージはSQLiteに保存される (翻訳の文脈用)
 - 接続したチャンネル名はSQLiteに保存され、Web UIでサジェスト候補として表示される
 - 非日本語メッセージはGemini 3 Flashで日本語に翻訳 (非同期・ノンブロッキング)
-- 翻訳時に直近20件のチャット履歴を文脈として送信
+- 翻訳時に直近20件のチャット履歴と直近5分以内の配信者発言を文脈として送信
+- チャンネル接続時に自動で音声文字起こしを開始 (streamlink → ffmpeg → Whisper API)
+- 文字起こし結果はSQLiteに保存され、非日本語の場合はGeminiで翻訳
+- Web UIは2ペイン構成 (左: 配信者の文字起こし+翻訳、右: チャット+翻訳)
 
 ## DB スキーマ
 
@@ -62,6 +65,14 @@ npm start  # node server.js — デフォルト http://localhost:3000
 | `username` | TEXT | ユーザー名 |
 | `message` | TEXT | メッセージ本文 |
 | `timestamp` | TEXT | 送信日時 (ISO 8601) |
+
+### transcriptions テーブル
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| `id` | INTEGER (PK, AUTO) | 文字起こしID |
+| `channel` | TEXT | チャンネル名 |
+| `message` | TEXT | 文字起こし本文 |
+| `timestamp` | TEXT | 日時 (ISO 8601) |
 
 ## Socket.IO イベント
 

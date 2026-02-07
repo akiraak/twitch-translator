@@ -45,11 +45,26 @@ const upsertChannel = db.prepare(`
 const getChannels = db.prepare(
   `SELECT name FROM channels ORDER BY last_connected_at DESC`
 );
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transcriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    message TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+  )
+`);
+
 const insertMessage = db.prepare(
   `INSERT INTO messages (channel, username, message, timestamp) VALUES (?, ?, ?, ?)`
 );
 const getRecentMessages = db.prepare(
   `SELECT username, message FROM messages WHERE channel = ? ORDER BY id DESC LIMIT 20`
+);
+const insertTranscription = db.prepare(
+  `INSERT INTO transcriptions (channel, message, timestamp) VALUES (?, ?, ?)`
+);
+const getRecentTranscriptions = db.prepare(
+  `SELECT message FROM transcriptions WHERE channel = ? AND timestamp > ? ORDER BY id DESC LIMIT 10`
 );
 
 // Translation
@@ -64,10 +79,18 @@ const SYSTEM_INSTRUCTION = `あなたはTwitchチャットの翻訳者です。
 
 async function translateIfNeeded(msgData) {
   try {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const recentTranscriptions = getRecentTranscriptions.all(msgData.channel, fiveMinAgo).reverse();
     const recent = getRecentMessages.all(msgData.channel).reverse();
     let context = "";
+    if (recentTranscriptions.length > 0) {
+      context +=
+        "配信者の最近の発言:\n" +
+        recentTranscriptions.map((t) => `配信者: ${t.message}`).join("\n") +
+        "\n\n";
+    }
     if (recent.length > 0) {
-      context =
+      context +=
         "最近のチャット:\n" +
         recent.map((m) => `${m.username}: ${m.message}`).join("\n") +
         "\n\n";
@@ -167,11 +190,15 @@ async function transcribeChunk(pcmChunk) {
 
     const text = response.text.trim();
     if (text) {
+      const timestamp = new Date().toISOString();
+      if (currentChannel) {
+        insertTranscription.run(currentChannel, text, timestamp);
+      }
       const id = ++transcriptionId;
       io.emit("transcription", {
         id,
         text,
-        timestamp: new Date().toISOString(),
+        timestamp,
       });
       translateTranscription(id, text);
     }
