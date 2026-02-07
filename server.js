@@ -228,7 +228,16 @@ const PRE_ROLL_MS = 200;              // Pre-roll audio before speech onset
 const PRE_ROLL_BYTES = 16000 * 2 * (PRE_ROLL_MS / 1000);
 const DEBOUNCE_DELAY_MS = 1500;        // Merge transcriptions within this window
 
+// Whisper API concurrency control (semaphore)
+const MAX_CONCURRENT_WHISPER = 2;
+let whisperInFlight = 0;
+const whisperQueue = [];
+
 async function transcribeChunk(pcmChunk, onResult) {
+  if (whisperInFlight >= MAX_CONCURRENT_WHISPER) {
+    await new Promise((resolve) => whisperQueue.push(resolve));
+  }
+  whisperInFlight++;
   try {
     const wavBuffer = createWavBuffer(pcmChunk);
     const file = new File([wavBuffer], "audio.wav", { type: "audio/wav" });
@@ -244,6 +253,9 @@ async function transcribeChunk(pcmChunk, onResult) {
     }
   } catch (e) {
     console.error("Transcription error:", e.message);
+  } finally {
+    whisperInFlight--;
+    if (whisperQueue.length > 0) whisperQueue.shift()();
   }
 }
 
