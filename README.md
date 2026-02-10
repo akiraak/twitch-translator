@@ -50,10 +50,16 @@ http://localhost:3000 を開き、チャンネル名を入力して「開始」�
 
 ## 必要な外部ツール
 
-音声文字起こし機能には以下のツールが必要です。
+音声文字起こし機能には以下のツールが必要です。起動時に自動チェックされ、未インストールの場合はエラーメッセージとともに終了します。
 
 - [streamlink](https://streamlink.github.io/) — 配信ストリームの取得
 - [ffmpeg](https://ffmpeg.org/) — 音声の抽出・変換
+
+```bash
+# インストール例 (Ubuntu/Debian)
+pipx install streamlink
+sudo apt install ffmpeg
+```
 
 ## プロジェクト構成
 

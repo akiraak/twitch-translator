@@ -54,6 +54,7 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - 音声はVAD (Voice Activity Detection) で発話区間を検出し、動的に1〜15秒のチャンクに分割
 - 連続する文字起こし結果は1.5秒のデバウンスで結合してから翻訳に送信
 - Whisper APIへの同時リクエストはセマフォで最大2に制限
+- 起動時に外部コマンド (streamlink, ffmpeg) と必須環境変数の存在をチェックし、不足時はエラーメッセージを表示して終了
 - streamlink/ffmpegのエラー時は指数バックオフで最大5回自動リトライ
 - チャットTTS読み上げの重複排除: 直近30秒のチャットと文字起こしをバイグラム類似度で比較し、TTS読み上げと判定されたものはスキップ
 - 文字起こし結果はSQLiteに保存され、Geminiで翻訳 (選択言語 → 英語 / その他 → 選択言語)
@@ -62,7 +63,7 @@ npm start  # node server.js — デフォルト http://localhost:3000
 
 ## モジュール設計
 
-- **server.js**: エントリポイント。モジュールの初期化、Socket.IO/TMIイベントの配線、TTS読み上げ検出ロジック
+- **server.js**: エントリポイント。起動時の外部コマンド・環境変数チェック、モジュールの初期化、Socket.IO/TMIイベントの配線、TTS読み上げ検出ロジック
 - **lib/db.js**: DBスキーマ定義とprepared statementsのエクスポート。他モジュールから `require` して使用
 - **lib/audio.js**: 純粋関数 (`createWavBuffer`, `calcRMS`)。外部依存なし
 - **lib/translator.js**: `createTranslator(ai)` ファクトリで生成。`buildContext()` で文脈構築を共通化。翻訳結果の文字列を返すだけでSocket.IOに依存しない。`langCode` 引数で翻訳方向を動的に切替
@@ -112,6 +113,7 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - `channel-list` (string[]) — 保存済みチャンネル候補一覧
 - `current-language` (lang: string) — 現在の翻訳基準言語
 - `transcription` ({id, text, timestamp}) — 音声文字起こし結果
+- `transcription-corrected` ({id, corrected}) — Geminiによる文字起こし補正結果
 - `transcription-translation` ({id, translation}) — 文字起こしの翻訳結果
 - `transcription-stopped` — 文字起こしリトライ上限到達による停止通知
 - `manual-translate-result` (translation: string) — 手動翻訳結果
