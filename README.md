@@ -1,6 +1,6 @@
-# Twitch AI Monitor
+# Twitch Translator
 
-Twitchチャットをリアルタイムで監視し、非日本語コメントをAIで自動翻訳するWebアプリケーションです。
+Twitchチャットをリアルタイムで監視し、非日本語コメントをAIで自動翻訳するアプリケーションです。
 配信者の音声をリアルタイムで文字起こし・翻訳する機能も搭載しています。
 
 ## 機能
@@ -17,6 +17,8 @@ Twitchチャットをリアルタイムで監視し、非日本語コメント�
 - チャットと配信者の発言を時系列で表示 (配信者表示ON/OFF切替可)
 - 手動翻訳機能 (選択言語 → 英語 / その他 → 選択言語)
 - 接続チャンネル履歴のサジェスト表示
+- Web UIから設定可能 (APIキー等はSQLiteに保存)
+- Electronデスクトップアプリとしても動作
 
 ## セットアップ
 
@@ -24,56 +26,52 @@ Twitchチャットをリアルタイムで監視し、非日本語コメント�
 npm install
 ```
 
-`.env` ファイルを作成して環境変数を設定します。
-
-```
-TWITCH_TOKEN=oauth:your_token
-BOT_NAME=your_bot_name
-GEMINI_API_KEY=your_api_key
-OPENAI_API_KEY=your_openai_api_key
-```
-
-| 変数 | 説明 | 取得先 |
-|------|------|--------|
-| `TWITCH_TOKEN` | Twitch OAuth トークン | https://twitchapps.com/tmi/ |
-| `BOT_NAME` | Twitch ユーザー名 | あなたのTwitchアカウント名 |
-| `GEMINI_API_KEY` | Google Gemini API キー | https://aistudio.google.com/apikey |
-| `OPENAI_API_KEY` | OpenAI API キー (Whisper文字起こし用) | https://platform.openai.com/api-keys |
-
 ## 起動
 
 ```bash
 npm start
 ```
 
-http://localhost:3000 を開き、チャンネル名を入力して「開始」をクリックします。
+http://localhost:3000 を開き、初回起動時に表示される設定モーダルでAPIキーを入力します。
 
-## 必要な外部ツール
+| 設定項目 | 説明 | 取得先 |
+|----------|------|--------|
+| Twitch OAuth トークン | `oauth:` 付きトークン | https://twitchapps.com/tmi/ |
+| Twitch Bot ユーザー名 | あなたのTwitchアカウント名 | — |
+| Gemini API キー | Google Gemini API キー | https://aistudio.google.com/apikey |
+| OpenAI API キー | Whisper文字起こし用 | https://platform.openai.com/api-keys |
 
-音声文字起こし機能には以下のツールが必要です。起動時に自動チェックされ、未インストールの場合はエラーメッセージとともに終了します。
+設定はSQLiteに保存され、次回起動時に自動で読み込まれます。
 
-- [ffmpeg](https://ffmpeg.org/) — 音声の抽出・変換
+## Electron デスクトップアプリ
 
 ```bash
-# インストール例 (Ubuntu/Debian)
-sudo apt install ffmpeg
+# 開発時
+npm run electron
+
+# Windows向けビルド
+npm run dist:win
 ```
+
+ビルドされたアプリでは設定がユーザーデータディレクトリに保存されます。
 
 ## プロジェクト構成
 
 ```
 server.js              # エントリポイント (Express + Socket.IO + TMI の配線層)
+electron.js            # Electron メインプロセス (ウィンドウ管理・DBパス設定・ログ出力)
 lib/db.js              # SQLite スキーマ + クエリ
 lib/audio.js           # 音声ユーティリティ (WAV変換, RMS計算)
 lib/translator.js      # Gemini翻訳 (チャット・文字起こし・手動)
 lib/transcription.js   # 文字起こしパイプライン (VAD・Whisper・リトライ)
 lib/twitch-hls.js      # Twitch HLS URL取得 (GQL API + Usher API)
-public/index.html      # Web UI
+public/index.html      # Web UI (設定モーダル含む)
 ```
 
 ## 技術スタック
 
 - Node.js / Express v5 / Socket.IO v4
+- Electron (デスクトップアプリ)
 - tmi.js (Twitch IRC)
 - SQLite (better-sqlite3)
 - Google Gemini 3 Flash (@google/genai)

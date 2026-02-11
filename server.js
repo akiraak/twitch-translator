@@ -1,4 +1,4 @@
-require("dotenv").config();
+const path = require("path");
 const { execFileSync } = require("child_process");
 const express = require("express");
 const http = require("http");
@@ -7,45 +7,18 @@ const tmi = require("tmi.js");
 const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
 
-// --- 起動時の依存チェック ---
+// --- 起動時の依存チェック (ffmpeg のみ) ---
 function checkDependencies() {
-  const required = [
-    { cmd: "ffmpeg", args: ["-version"], hint: "sudo apt install ffmpeg" },
-  ];
-  const missing = [];
-  for (const dep of required) {
-    try {
-      execFileSync(dep.cmd, dep.args, { stdio: "ignore" });
-    } catch {
-      missing.push(dep);
-    }
-  }
-  if (missing.length > 0) {
-    console.error("必要な外部コマンドが見つかりません:");
-    for (const dep of missing) {
-      console.error(`  - ${dep.cmd} (インストール: ${dep.hint})`);
-    }
-    process.exit(1);
-  }
-
-  const envVars = [
-    { name: "TWITCH_TOKEN", desc: "Twitch OAuth トークン" },
-    { name: "BOT_NAME", desc: "Twitch bot ユーザー名" },
-    { name: "GEMINI_API_KEY", desc: "Google Gemini API キー" },
-    { name: "OPENAI_API_KEY", desc: "OpenAI API キー" },
-  ];
-  const missingEnv = envVars.filter((v) => !process.env[v.name]);
-  if (missingEnv.length > 0) {
-    console.error("必要な環境変数が設定されていません (.env を確認してください):");
-    for (const v of missingEnv) {
-      console.error(`  - ${v.name}: ${v.desc}`);
-    }
-    process.exit(1);
+  const ffmpegPath = require("ffmpeg-static").replace("app.asar", "app.asar.unpacked");
+  try {
+    execFileSync(ffmpegPath, ["-version"], { stdio: "ignore" });
+  } catch {
+    throw new Error(`必要な外部コマンドが見つかりません: ffmpeg (パス: ${ffmpegPath})`);
   }
 }
 checkDependencies();
 
-const { upsertChannel, getChannels, insertMessage, insertTranscription, getRecentMessages } = require("./lib/db");
+const { upsertChannel, getChannels, insertMessage, insertTranscription, getRecentMessages, getSetting, upsertSetting } = require("./lib/db");
 const { createTranslator } = require("./lib/translator");
 const { Transcriber } = require("./lib/transcription");
 
@@ -53,9 +26,38 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const translator = createTranslator(ai);
+// --- 遅延初期化される AI クライアント ---
+let ai = null;
+let openai = null;
+let translator = null;
+let transcriber = null;
+let isInitialized = false;
+
+const SETTING_KEYS = ["TWITCH_TOKEN", "BOT_NAME", "GEMINI_API_KEY", "OPENAI_API_KEY"];
+
+function loadSettings() {
+  const settings = {};
+  for (const key of SETTING_KEYS) {
+    const row = getSetting.get(key);
+    if (row) settings[key] = row.value;
+  }
+  return settings;
+}
+
+function maskValue(value) {
+  if (!value) return "";
+  if (value.length <= 8) return "***";
+  return value.slice(0, 4) + "***" + value.slice(-4);
+}
+
+function getMaskedSettings() {
+  const settings = loadSettings();
+  const masked = {};
+  for (const key of SETTING_KEYS) {
+    masked[key] = maskValue(settings[key] || "");
+  }
+  return masked;
+}
 
 let tmiClient = null;
 let currentChannel = null;
@@ -98,32 +100,54 @@ function isTTSReadout(text) {
   return recentChats.some((chat) => isTTSMatch(text, chat.message));
 }
 
-const transcriber = new Transcriber(openai, {
-  onTranscription: (text) => {
-    if (isTTSReadout(text)) return;
-    const timestamp = new Date().toISOString();
-    if (currentChannel) {
-      insertTranscription.run(currentChannel, text, timestamp);
-    }
-    const id = ++transcriptionId;
-    io.emit("transcription", { id, text, timestamp });
-    translator.correctTranscription(text, currentChannel)
-      .then((corrected) => {
-        if (corrected && corrected !== text) {
-          io.emit("transcription-corrected", { id, corrected });
-        }
-        const textForTranslation = corrected || text;
-        return translator.translateTranscription(textForTranslation, currentChannel, currentLanguage)
-          .then((translation) => {
-            if (translation) io.emit("transcription-translation", { id, translation });
-          });
-      })
-      .catch((e) => console.error("Transcription correction/translation error:", e.message));
-  },
-  onStopped: () => {
-    io.emit("transcription-stopped");
-  },
-});
+function initializeServices(settings) {
+  ai = new GoogleGenAI({ apiKey: settings.GEMINI_API_KEY });
+  openai = new OpenAI({ apiKey: settings.OPENAI_API_KEY });
+  translator = createTranslator(ai);
+
+  if (transcriber) {
+    transcriber.stop();
+  }
+  transcriber = new Transcriber(openai, {
+    onTranscription: (text) => {
+      if (isTTSReadout(text)) return;
+      const timestamp = new Date().toISOString();
+      if (currentChannel) {
+        insertTranscription.run(currentChannel, text, timestamp);
+      }
+      const id = ++transcriptionId;
+      io.emit("transcription", { id, text, timestamp });
+      translator.correctTranscription(text, currentChannel)
+        .then((corrected) => {
+          if (corrected && corrected !== text) {
+            io.emit("transcription-corrected", { id, corrected });
+          }
+          const textForTranslation = corrected || text;
+          return translator.translateTranscription(textForTranslation, currentChannel, currentLanguage)
+            .then((translation) => {
+              if (translation) io.emit("transcription-translation", { id, translation });
+            });
+        })
+        .catch((e) => console.error("Transcription correction/translation error:", e.message));
+    },
+    onStopped: () => {
+      io.emit("transcription-stopped");
+    },
+  });
+
+  // TMI で使うために process.env にも設定
+  process.env.BOT_NAME = settings.BOT_NAME;
+  process.env.TWITCH_TOKEN = settings.TWITCH_TOKEN;
+
+  isInitialized = true;
+  console.log("Services initialized successfully");
+}
+
+// 起動時に DB から設定を読み込み、揃っていれば自動初期化
+const savedSettings = loadSettings();
+if (SETTING_KEYS.every((k) => savedSettings[k])) {
+  initializeServices(savedSettings);
+}
 
 function createTmiClient(channel) {
   const client = new tmi.Client({
@@ -152,16 +176,66 @@ function createTmiClient(channel) {
   return client;
 }
 
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
 
 io.on("connection", (socket) => {
+  // 設定状態を送信
+  socket.emit("settings-status", { configured: isInitialized, settings: getMaskedSettings() });
+
   if (currentChannel) {
     socket.emit("current-channel", currentChannel);
   }
   socket.emit("channel-list", getChannels.all().map((r) => r.name));
   socket.emit("current-language", currentLanguage);
 
+  socket.on("get-settings", () => {
+    socket.emit("settings-data", getMaskedSettings());
+  });
+
+  socket.on("save-settings", (data) => {
+    if (!data || typeof data !== "object") {
+      socket.emit("settings-error", "無効なデータです");
+      return;
+    }
+
+    // 現在の設定を読み込み (マスク値のスキップ用)
+    const current = loadSettings();
+
+    for (const key of SETTING_KEYS) {
+      const value = data[key];
+      if (typeof value !== "string" || !value.trim()) continue;
+      // マスクされた値 (***を含む) はスキップ
+      if (value.includes("***")) continue;
+      current[key] = value.trim();
+    }
+
+    // 全キーが揃っているかチェック
+    const missing = SETTING_KEYS.filter((k) => !current[k]);
+    if (missing.length > 0) {
+      socket.emit("settings-error", `未入力の項目があります: ${missing.join(", ")}`);
+      return;
+    }
+
+    // DB に保存
+    for (const key of SETTING_KEYS) {
+      upsertSetting.run(key, current[key]);
+    }
+
+    // サービスを (再) 初期化
+    try {
+      initializeServices(current);
+      io.emit("settings-status", { configured: true, settings: getMaskedSettings() });
+    } catch (e) {
+      console.error("Settings initialization error:", e);
+      socket.emit("settings-error", `初期化エラー: ${e.message}`);
+    }
+  });
+
   socket.on("join-channel", async (channel) => {
+    if (!isInitialized) {
+      socket.emit("channel-error", "設定が完了していません。先にAPIキーを設定してください。");
+      return;
+    }
     if (!channel || typeof channel !== "string") return;
     channel = channel.trim().toLowerCase().replace(/^#/, "");
     if (!channel) return;
@@ -180,7 +254,7 @@ io.on("connection", (socket) => {
       console.log(`Connected to #${channel}`);
       io.emit("channel-joined", channel);
       io.emit("channel-list", getChannels.all().map((r) => r.name));
-      transcriber.start(channel);
+      transcriber.start(channel).catch((e) => console.error("Transcriber start error:", e));
     } catch (e) {
       console.error(`Failed to connect to #${channel}:`, e);
       tmiClient = null;
@@ -189,6 +263,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("manual-translate", async (text) => {
+    if (!isInitialized) {
+      socket.emit("manual-translate-result", "設定が完了していません");
+      return;
+    }
     if (!text || typeof text !== "string") return;
     text = text.trim();
     if (!text) return;
@@ -209,16 +287,16 @@ io.on("connection", (socket) => {
   });
 
   socket.on("toggle-transcription", (enabled) => {
-    if (!currentChannel) return;
+    if (!currentChannel || !transcriber) return;
     if (enabled) {
-      transcriber.start(currentChannel);
+      transcriber.start(currentChannel).catch((e) => console.error("Transcriber start error:", e));
     } else {
       transcriber.stop();
     }
   });
 
   socket.on("leave-channel", async () => {
-    transcriber.stop();
+    if (transcriber) transcriber.stop();
     if (tmiClient) {
       try { await tmiClient.disconnect(); } catch (e) {}
       tmiClient = null;
@@ -230,6 +308,18 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+
+function startServer() {
+  return new Promise((resolve) => {
+    server.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      resolve(PORT);
+    });
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { startServer };

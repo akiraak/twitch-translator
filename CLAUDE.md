@@ -1,4 +1,4 @@
-# Twitch Translato
+# Twitch Translator
 
 Twitchチャットをリアルタイムで監視し、非日本語コメントをAIで日本語訳するWebアプリケーション。
 
@@ -7,7 +7,7 @@ Twitchチャットをリアルタイムで監視し、非日本語コメント�
 - **Runtime:** Node.js (CommonJS)
 - **Web:** Express v5 + Socket.IO v4
 - **Twitch接続:** tmi.js (IRC経由)
-- **DB:** SQLite (better-sqlite3) — `data.db` に保存
+- **DB:** SQLite (better-sqlite3) — `data.db` に保存 (Electron では userData ディレクトリ)
 - **AI翻訳:** Google Gemini 3 Flash (@google/genai)
 - **音声文字起こし:** Twitch GQL API + ffmpeg + OpenAI Whisper API
 - **フロントエンド:** Vanilla HTML/CSS/JS (public/index.html 単一ファイル)
@@ -16,13 +16,13 @@ Twitchチャットをリアルタイムで監視し、非日本語コメント�
 
 ```
 server.js              # エントリポイント (Express + Socket.IO + TMI の配線層)
+electron.js            # Electron メインプロセス (ウィンドウ管理・DBパス設定・ログ出力)
 lib/db.js              # SQLite スキーマ + prepared statements
 lib/audio.js           # 音声ユーティリティ (createWavBuffer, calcRMS)
 lib/translator.js      # Gemini翻訳 (チャット・文字起こし・手動の3種 + 文脈構築)
 lib/transcription.js   # Transcriberクラス (VAD・Whisper・プロセス管理・リトライ)
 lib/twitch-hls.js      # Twitch HLS URL取得 (GQL API + Usher API)
-public/index.html      # Web UI (HTML/CSS/JS一体型)
-.env                   # 環境変数 (TWITCH_TOKEN, BOT_NAME, GEMINI_API_KEY, OPENAI_API_KEY)
+public/index.html      # Web UI (HTML/CSS/JS一体型、設定モーダル含む)
 data.db                # SQLiteデータベース (自動生成)
 ```
 
@@ -32,15 +32,20 @@ data.db                # SQLiteデータベース (自動生成)
 npm start  # node server.js — デフォルト http://localhost:3000
 ```
 
-## 環境変数 (.env)
+## 設定管理
 
-| 変数 | 説明 |
-|------|------|
+APIキー等の設定はWeb UI上の設定モーダルから入力し、SQLite の `settings` テーブルに保存される。
+dotenv / `.env` ファイルは使用しない。
+
+| 設定キー | 説明 |
+|----------|------|
 | `TWITCH_TOKEN` | Twitch OAuth トークン (`oauth:...`) |
 | `BOT_NAME` | Twitch bot ユーザー名 |
 | `GEMINI_API_KEY` | Google Gemini API キー |
 | `OPENAI_API_KEY` | OpenAI API キー (Whisper文字起こし用) |
-| `PORT` | サーバーポート (デフォルト: 3000) |
+
+環境変数 `PORT` でサーバーポートを変更可能 (デフォルト: 3000)。
+環境変数 `TWITCH_TRANSLATO_DB_PATH` で DB ファイルパスを変更可能 (Electron では userData に自動設定)。
 
 ## アーキテクチャ
 
@@ -55,7 +60,8 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - 音声はVAD (Voice Activity Detection) で発話区間を検出し、動的に1〜15秒のチャンクに分割
 - 連続する文字起こし結果は1.5秒のデバウンスで結合してから翻訳に送信
 - Whisper APIへの同時リクエストはセマフォで最大2に制限
-- 起動時に外部コマンド (ffmpeg) と必須環境変数の存在をチェックし、不足時はエラーメッセージを表示して終了
+- 起動時に外部コマンド (ffmpeg) の存在をチェックし、不足時はエラーメッセージを表示して終了
+- APIキー等の設定はWeb UIの設定モーダルから入力し、SQLiteに保存。設定が揃うとAIクライアントを遅延初期化
 - HLS URL取得失敗/ffmpegのエラー時は指数バックオフで最大5回自動リトライ
 - チャットTTS読み上げの重複排除: 直近30秒のチャットと文字起こしをバイグラム類似度で比較し、TTS読み上げと判定されたものはスキップ
 - 文字起こし結果はSQLiteに保存され、Geminiで翻訳 (選択言語 → 英語 / その他 → 選択言語)
@@ -64,7 +70,7 @@ npm start  # node server.js — デフォルト http://localhost:3000
 
 ## モジュール設計
 
-- **server.js**: エントリポイント。起動時の外部コマンド (ffmpeg) ・環境変数チェック、モジュールの初期化、Socket.IO/TMIイベントの配線、TTS読み上げ検出ロジック
+- **server.js**: エントリポイント。起動時のffmpegチェック、設定に基づくAIクライアントの遅延初期化、Socket.IO/TMIイベントの配線、TTS読み上げ検出ロジック、設定管理イベント
 - **lib/db.js**: DBスキーマ定義とprepared statementsのエクスポート。他モジュールから `require` して使用
 - **lib/audio.js**: 純粋関数 (`createWavBuffer`, `calcRMS`)。外部依存なし
 - **lib/translator.js**: `createTranslator(ai)` ファクトリで生成。`buildContext()` で文脈構築を共通化。翻訳結果の文字列を返すだけでSocket.IOに依存しない。`langCode` 引数で翻訳方向を動的に切替
@@ -96,6 +102,12 @@ npm start  # node server.js — デフォルト http://localhost:3000
 | `message` | TEXT | 文字起こし本文 |
 | `timestamp` | TEXT | 日時 (ISO 8601) |
 
+### settings テーブル
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| `key` | TEXT (PK) | 設定キー |
+| `value` | TEXT | 設定値 |
+
 ## Socket.IO イベント
 
 ### クライアント → サーバー
@@ -104,6 +116,8 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - `toggle-transcription` (enabled: boolean) — 配信者文字起こしのON/OFF切替
 - `set-language` (lang: string) — 翻訳基準言語の変更 (ja, en, ko, zh, es, pt, fr, de, ru, th)
 - `manual-translate` (text: string) — 手動翻訳リクエスト
+- `get-settings` — マスク済み設定を要求
+- `save-settings` ({TWITCH_TOKEN, BOT_NAME, GEMINI_API_KEY, OPENAI_API_KEY}) — 設定保存 + 再初期化
 
 ### サーバー → クライアント
 - `current-channel` (channel) — 接続中のチャンネル (再接続時)
@@ -119,6 +133,9 @@ npm start  # node server.js — デフォルト http://localhost:3000
 - `transcription-translation` ({id, translation}) — 文字起こしの翻訳結果
 - `transcription-stopped` — 文字起こしリトライ上限到達による停止通知
 - `manual-translate-result` (translation: string) — 手動翻訳結果
+- `settings-status` ({configured: boolean, settings: object}) — 設定状態 (接続時 + 保存後に送信)
+- `settings-data` (object) — マスク済み設定値 (get-settings の応答)
+- `settings-error` (message: string) — 設定エラーメッセージ
 
 ## コーディング規約
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Twitch Chat Monitor</title>
+  <title>Twitch Translator</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -281,11 +281,100 @@
       overflow-y: auto;
       height: 60px;
     }
+    #btn-settings {
+      background: none;
+      border: none;
+      color: #adadb8;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    #btn-settings:hover { color: #efeff1; }
+    #settings-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    #settings-modal {
+      background: #18181b;
+      border: 1px solid #303032;
+      border-radius: 8px;
+      padding: 24px;
+      width: 420px;
+      max-width: 90vw;
+    }
+    #settings-modal h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #efeff1;
+    }
+    .settings-field {
+      margin-bottom: 12px;
+    }
+    .settings-field label {
+      display: block;
+      font-size: 13px;
+      color: #adadb8;
+      margin-bottom: 4px;
+    }
+    .settings-field input {
+      width: 100%;
+      background: #0e0e10;
+      border: 1px solid #303032;
+      color: #efeff1;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .settings-field input:focus {
+      outline: none;
+      border-color: #bf94ff;
+    }
+    #settings-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      justify-content: flex-end;
+    }
+    #settings-save {
+      background: #9147ff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #settings-save:hover { background: #772ce8; }
+    #settings-save:disabled { opacity: 0.5; cursor: default; }
+    #settings-cancel {
+      background: #303032;
+      color: #efeff1;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #settings-cancel:hover { background: #3a3a3d; }
+    #settings-error {
+      color: #eb0400;
+      font-size: 13px;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
   <header>
-    Twitch Chat Monitor<a id="header-channel" href="#" target="_blank" rel="noopener"></a><span id="status">待機中</span>
+    Twitch Translator<a id="header-channel" href="#" target="_blank" rel="noopener"></a><span id="status">待機中</span><button id="btn-settings" title="設定">&#9881;</button>
   </header>
   <div id="controls">
     <input type="text" id="channel-input" placeholder="channel name" list="channel-list" autocomplete="off">
@@ -326,6 +415,33 @@
       <div class="translate-pane">
         <div class="translate-pane-label">翻訳結果</div>
         <div id="translate-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-modal">
+      <h2>設定</h2>
+      <div class="settings-field">
+        <label for="setting-twitch-token">Twitch OAuth トークン</label>
+        <input type="password" id="setting-twitch-token" placeholder="oauth:...">
+      </div>
+      <div class="settings-field">
+        <label for="setting-bot-name">Twitch Bot ユーザー名</label>
+        <input type="text" id="setting-bot-name" placeholder="bot_username">
+      </div>
+      <div class="settings-field">
+        <label for="setting-gemini-key">Gemini API キー</label>
+        <input type="password" id="setting-gemini-key" placeholder="AIza...">
+      </div>
+      <div class="settings-field">
+        <label for="setting-openai-key">OpenAI API キー</label>
+        <input type="password" id="setting-openai-key" placeholder="sk-...">
+      </div>
+      <div id="settings-error"></div>
+      <div id="settings-actions">
+        <button id="settings-cancel">キャンセル</button>
+        <button id="settings-save">保存</button>
       </div>
     </div>
   </div>
@@ -543,6 +659,90 @@
       d.textContent = str;
       return d.innerHTML;
     }
+
+    // --- 設定モーダル ---
+    const settingsOverlay = document.getElementById("settings-overlay");
+    const settingsCancel = document.getElementById("settings-cancel");
+    const settingsSave = document.getElementById("settings-save");
+    const settingsError = document.getElementById("settings-error");
+    const btnSettings = document.getElementById("btn-settings");
+    const settingInputs = {
+      TWITCH_TOKEN: document.getElementById("setting-twitch-token"),
+      BOT_NAME: document.getElementById("setting-bot-name"),
+      GEMINI_API_KEY: document.getElementById("setting-gemini-key"),
+      OPENAI_API_KEY: document.getElementById("setting-openai-key"),
+    };
+
+    let settingsConfigured = false;
+
+    function openSettings() {
+      settingsError.textContent = "";
+      socket.emit("get-settings");
+      settingsOverlay.classList.remove("hidden");
+    }
+
+    function closeSettings() {
+      settingsOverlay.classList.add("hidden");
+    }
+
+    btnSettings.addEventListener("click", openSettings);
+
+    settingsCancel.addEventListener("click", () => {
+      if (!settingsConfigured) return; // 未設定時はキャンセル不可
+      closeSettings();
+    });
+
+    settingsSave.addEventListener("click", () => {
+      settingsError.textContent = "";
+      settingsSave.disabled = true;
+      const data = {};
+      for (const [key, input] of Object.entries(settingInputs)) {
+        data[key] = input.value;
+      }
+      socket.emit("save-settings", data);
+    });
+
+    // マスク値が入っている入力欄はフォーカス時にクリア
+    for (const input of Object.values(settingInputs)) {
+      input.addEventListener("focus", () => {
+        if (input.value.includes("***")) {
+          input.value = "";
+        }
+      });
+    }
+
+    socket.on("settings-status", (data) => {
+      settingsConfigured = data.configured;
+      settingsSave.disabled = false;
+      if (!data.configured) {
+        channelInput.disabled = true;
+        btnStart.disabled = true;
+        openSettings();
+      } else {
+        channelInput.disabled = !!currentChannel;
+        btnStart.disabled = false;
+        closeSettings();
+      }
+      // キャンセルボタンの表示切替
+      settingsCancel.style.display = data.configured ? "" : "none";
+    });
+
+    socket.on("settings-data", (settings) => {
+      for (const [key, input] of Object.entries(settingInputs)) {
+        input.value = settings[key] || "";
+      }
+    });
+
+    socket.on("settings-error", (msg) => {
+      settingsError.textContent = msg;
+      settingsSave.disabled = false;
+    });
+
+    // currentChannel の変数をトラック
+    let currentChannel = null;
+    socket.on("current-channel", (ch) => { currentChannel = ch; });
+    socket.on("channel-joined", () => { currentChannel = true; });
+    socket.on("channel-left", () => { currentChannel = null; });
   </script>
 </body>
 </html>

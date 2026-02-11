@@ -2,9 +2,13 @@
   "name": "twitch-translato",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "electron.js",
   "scripts": {
     "start": "node server.js",
+    "electron": "electron .",
+    "rebuild": "electron-rebuild",
+    "predist:win": "npm_config_platform=win32 npm_config_arch=x64 node node_modules/ffmpeg-static/install.js",
+    "dist:win": "electron-builder --win",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -13,10 +17,37 @@
   "dependencies": {
     "@google/genai": "^1.40.0",
     "better-sqlite3": "^12.6.2",
-    "dotenv": "^17.2.4",
     "express": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
     "openai": "^6.18.0",
     "socket.io": "^4.8.3",
     "tmi.js": "^1.8.5"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.7.0",
+    "electron-rebuild": "^3.2.9"
+  },
+  "build": {
+    "appId": "com.twitch-translato.app",
+    "productName": "Twitch Translato",
+    "files": [
+      "electron.js",
+      "server.js",
+      "lib/**/*",
+      "public/**/*",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
